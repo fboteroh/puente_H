@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Simulador Puente H - Motores DC</title>
+<title>Simulador Puente H para Motores DC</title>
 <style>
 :root{--bg:#f6f7f9;--card:#fff;--tx:#1b1f24;--mu:#5d6773;--bd:#d9dde3;--ac:#0b6bcb;--wa:#b26a00;--bad:#b3261e;--cv:#fbfcfd;
 box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
@@ -27,20 +27,23 @@ input[type=range]{width:100%}
 canvas{width:100%;display:block;background:var(--cv);border:1px solid var(--bd);border-radius:8px}
 .info p,.info li{font-size:.88rem;margin:4px 0}.info ul{padding-left:18px;margin:4px 0}
 .wa{color:var(--wa)}.bad{color:var(--bad)}
+.hot{color:#e5534b}.hot *{stroke-width:3!important}.ctl{color:var(--ac)}.ctl *{stroke-width:2.4!important}.sh{color:#d633ff}.sh *{stroke-width:3.5!important}
 </style>
 </head>
 <body>
 <div class="wrap">
-<h1>Puente H para motores DC</h1>
-<p class="sub">Control de velocidad (PWM) y sentido de giro con transistores y diodos.</p>
+<h1>Puente H para 2 Motores DC</h1>
+<p class="sub">Control de velocidad (PWM) y sentido de giro con transistores y diodos discretos.</p>
 <div class="grid">
 <div>
 <div class="card">
 <div class="s" style="margin-top:0"><label><span>Alimentación Vcc</span><b id="v_vcc"></b></label><input type="range" id="vcc" min="5" max="24" step="0.5" value="12"></div>
 <div class="s"><label><span>Frecuencia PWM</span><b id="v_f"></b></label><input type="range" id="frq" min="0" max="1000"></div>
+<div class="s"><label><span>Modo PWM</span></label><select id="cm" style="width:100%"><option value="0">Lento: lado alto fijo, PWM en el bajo</option><option value="1">Rápido: complementario (50 % = parado)</option></select></div>
+<div class="s"><label><span>Tiempo muerto</span><b id="v_td"></b></label><input type="range" id="td" min="0" max="100" step="5" value="5"></div><div class="tl" id="dtn"></div>
 <div class="s"><label><span>Transistores</span></label><select id="tech" style="width:100%"></select></div>
 <div class="row"><button data-p="straight">Recto</button><button data-p="curve">Curva</button><button data-p="spin">Giro en sitio</button><button data-p="stop">Parar</button></div>
-<div class="row"><button id="pause">Pausa</button><button id="reset">Reiniciar</button><label style="align-self:center;font-size:.85rem"><input type="checkbox" id="slow"> Cámara lenta ×0,1</label></div>
+<div class="row"><button id="pause">Pausa</button><button id="reset">Reiniciar</button><label style="align-self:center;font-size:.85rem">Velocidad <select id="slow"><option value="1">1×</option><option value="0.1">0,1×</option><option value="0.01">0,01×</option><option value="0.001">0,001×</option></select></label></div>
 </div>
 <div id="motors"></div>
 </div>
@@ -48,7 +51,7 @@ canvas{width:100%;display:block;background:var(--cv);border:1px solid var(--bd);
 <div class="card"><canvas id="cv"></canvas></div>
 <div class="card"><div class="row" style="margin:0 0 6px" id="tb"></div>
 <svg id="dg" viewBox="0 0 460 300" style="width:100%;max-width:560px;display:block;margin:auto;color:var(--tx)"></svg></div>
-<div class="card info" id="bom"></div>
+<div class='card'><div class='mh'><b>Esquemático completo · motor <span id='sn'></span></b><label style='font-size:.85rem'><input type='checkbox' id='hl' checked> Resaltar ramas que conducen</label></div><p class='tl'>Rojo: corriente de potencia. Azul: corriente de excitación. Para seguir cada ciclo del PWM baja la velocidad a 0,01× o menos.</p><svg id='sch' viewBox='0 0 700 420' style='width:100%;max-width:700px;display:block;margin:8px auto 0;color:var(--tx)'></svg><div class='info' id='tbl'></div></div><div class='card info' id='bom'></div><div class='card'><div class='mh'><b>Código de ejemplo para el ESP32</b><button id='cp'>Copiar</button></div><p class='tl'>Arduino-ESP32 3.x (ledcAttach / ledcWrite). Se actualiza con la frecuencia PWM y el tiempo muerto.</p><pre id='code' style='overflow:auto;font-size:.78rem;font-family:ui-monospace,Menlo,Consolas,monospace;background:var(--bg);border:1px solid var(--bd);border-radius:8px;padding:10px;margin:0'></pre><p class='tl'>El modo complementario con tiempo muerto por hardware requiere el periférico MCPWM del ESP32; LEDC no lo genera.</p></div>
 </div>
 </div>
 </div>
@@ -56,13 +59,13 @@ canvas{width:100%;display:block;background:var(--cv);border:1px solid var(--bd);
 var $=function(i){return document.getElementById(i)};
 // vd = caída fija total en conducción (V), rs = resistencia serie total (Ω), imax = corriente máxima de colector/drenador (A)
 var TECH={
- dar:{n:"TIP120 / TIP125 (Darlington)",vd:3,rs:0.5,imax:5,bf:250,vbe:1.4,hi:"TIP125 (PNP)",lo:"TIP120 (NPN)"},
- bjt:{n:"TIP31C / TIP32C (BJT)",vd:1.4,rs:0.2,imax:3,bf:10,vbe:0.8,hi:"TIP32C (PNP)",lo:"TIP31C (NPN)"},
- mos:{n:"IRFZ44N / IRF9Z34N (MOSFET)",vd:0,rs:0.16,imax:15,bf:0,vbe:0,hi:"IRF9Z34N (canal P)",lo:"IRFZ44N (canal N)"}
+ dar:{n:"TIP120 / TIP125 (Darlington)",vd:3,rs:0.5,imax:5,bf:250,vbe:1.4,toff:8,hi:"TIP125 (PNP)",lo:"TIP120 (NPN)"},
+ bjt:{n:"TIP31C / TIP32C (BJT)",vd:1.4,rs:0.2,imax:3,bf:10,vbe:0.8,toff:2,hi:"TIP32C (PNP)",lo:"TIP31C (NPN)"},
+ mos:{n:"IRLZ44N / IRF9Z34N (MOSFET)",vd:0,rs:0.16,imax:15,bf:0,vbe:0,toff:0.15,hi:"IRF9Z34N (canal P)",lo:"IRLZ44N (canal N, nivel lógico)"}
 };
-var G={vcc:12,f:1000,tech:"dar",slow:false},DT=5e-6,VF=1.0;
+var G={vcc:12,f:1000,tech:"dar",sc:1,cm:0,td:5},DT=5e-6,VF=1.0;
 var DIRS=[["fwd","Adelante"],["rev","Atrás"],["brake","Freno"],["coast","Libre"]];
-function mk(n,R,L,K,J,b){return{n:n,R:R,L:L,K:K,J:J,b:b,dir:"fwd",duty:0.6,load:3,i:0,w:0,vavg:0,iavg:0,da:0,fOn:0,fRec:0,cN:0,cOn:0,cRec:0,vh:[],ih:[],wh:[]}}
+function mk(n,R,L,K,J,b){return{n:n,R:R,L:L,K:K,J:J,b:b,dz:0,sc:0,stI:0,stE:0,fl:0,pt:"OFF",qs:[0,0,0,0],lc:0,c14:0,c23:0,cDp:0,cDn:0,f14:0,f23:0,fDp:0,fDn:0,dir:"fwd",duty:0.6,load:3,i:0,w:0,vavg:0,iavg:0,da:0,fOn:0,fRec:0,cN:0,cOn:0,cRec:0,vh:[],ih:[],wh:[]}}
 var M=[mk("A",4,2e-3,0.02,2e-5,2e-6),mk("B",6,3e-3,0.025,4e-5,3e-6)];
 var sel=0,paused=false,tsim=0,sa=0,carry=0,last=0;
 Object.keys(TECH).forEach(function(k){var o=document.createElement("option");o.value=k;o.textContent=TECH[k].n;$("tech").appendChild(o)});
@@ -80,42 +83,61 @@ function syncUI(){
  M.forEach(function(m,k){
   [].forEach.call($("dr"+k).children,function(b){b.classList.toggle("on",b.dataset.d==m.dir)});
   $("du"+k).value=Math.round(m.duty*100);$("ld"+k).value=m.load;
-  $("vd"+k).textContent=Math.round(m.duty*100)+" %";$("vl"+k).textContent=m.load+" mN·m";
+  $("vd"+k).textContent=Math.round(m.duty*100)+" %"+(G.cm&&(m.dir=="fwd"||m.dir=="rev")?" (D = "+Math.round(dEff(m)*100)+" %)":"");$("vl"+k).textContent=m.load+" mN·m";
  });
- $("v_vcc").textContent=G.vcc.toFixed(1)+" V";$("v_f").textContent=fF(G.f);
+ $("v_vcc").textContent=G.vcc.toFixed(1)+" V";$("v_f").textContent=fF(G.f);$("v_td").textContent=G.td+" µs";dtNote();
 }
 function fF(f){return f>=1e3?+(f/1e3).toFixed(2)+" kHz":Math.round(f)+" Hz"}
 M.forEach(function(m,k){
- $("dr"+k).onclick=function(e){if(e.target.dataset.d){m.dir=e.target.dataset.d;syncUI();dgLabel()}};
+ $("dr"+k).onclick=function(e){if(e.target.dataset.d){setDir(m,e.target.dataset.d);syncUI();dgLabel()}};
  $("du"+k).oninput=function(){m.duty=this.value/100;syncUI()};
  $("ld"+k).oninput=function(){m.load=+this.value;syncUI()};
 });
-$("vcc").oninput=function(){G.vcc=+this.value;syncUI();bom()};
+$("vcc").oninput=function(){G.vcc=+this.value;syncUI();bom();schem()};
 $("frq").value=1000*Math.log(G.f/500)/Math.log(40);
-$("frq").oninput=function(){G.f=500*Math.pow(40,this.value/1000);syncUI()};
-$("tech").onchange=function(){G.tech=this.value;bom()};
-$("slow").onchange=function(){G.slow=this.checked};
+$("frq").oninput=function(){G.f=500*Math.pow(40,this.value/1000);syncUI();codeUpd()};
+$("cm").onchange=function(){G.cm=+this.value;syncUI();reset()};$("td").oninput=function(){G.td=+this.value;syncUI();codeUpd()};
+$("tech").onchange=function(){G.tech=this.value;bom();schem();dtNote()};
+$("slow").onchange=function(){G.sc=+this.value};
 $("pause").onclick=function(){paused=!paused;this.textContent=paused?"Reanudar":"Pausa"};
-function reset(){tsim=0;sa=0;M.forEach(function(m){m.i=m.w=m.vavg=m.iavg=0;m.vh=[];m.ih=[];m.wh=[]})}
+function reset(){tsim=0;sa=0;M.forEach(function(m){m.i=m.w=m.vavg=m.iavg=0;m.vh=[];m.ih=[];m.wh=[];m.sc=0;m.stE=0;m.stI=0;m.dz=0;m.fl=0;m.lc=0})}
 $("reset").onclick=reset;
 var PR={straight:[["fwd",0.7],["fwd",0.7]],curve:[["fwd",0.8],["fwd",0.4]],spin:[["fwd",0.6],["rev",0.6]],stop:[["brake",0],["brake",0]]};
-[].forEach.call(document.querySelectorAll("[data-p]"),function(b){b.onclick=function(){PR[b.dataset.p].forEach(function(p,k){M[k].dir=p[0];M[k].duty=p[1]});syncUI();dgLabel()}});
+[].forEach.call(document.querySelectorAll("[data-p]"),function(b){b.onclick=function(){PR[b.dataset.p].forEach(function(p,k){setDir(M[k],p[0]);M[k].duty=p[1]});syncUI();dgLabel()}});
 M.forEach(function(m,k){$("tb").insertAdjacentHTML("beforeend",'<button data-s="'+k+'">Puente del motor '+m.n+'</button>')});
 $("tb").onclick=function(e){if(e.target.dataset.s!==undefined){sel=+e.target.dataset.s;tabs()}};
-function tabs(){[].forEach.call($("tb").children,function(b,k){b.classList.toggle("on",k==sel)})}
+function tabs(){[].forEach.call($("tb").children,function(b,k){b.classList.toggle("on",k==sel)});schem()}
 // ---- simulación
+function dEff(m){return m.dir=="fwd"?0.5+m.duty/2:0.5-m.duty/2}
+function shoot(m,T){if(G.td>=T.toff)return;var ip=Math.min((G.vcc-T.vd)/T.rs,T.imax*5);m.sc++;m.stI=Math.max(m.stI,ip);m.stE+=0.5*G.vcc*ip*(T.toff-G.td);m.fl=0.8}
+function setDir(m,nd){var T=TECH[G.tech],a=["fwd","rev","brake"];if(a.indexOf(m.dir)>=0&&a.indexOf(nd)>=0&&m.dir!=nd){shoot(m,T);m.dz=tsim+G.td*1e-6}m.dir=nd}
 function stepAll(){
- var T=TECH[G.tech],vcc=G.vcc,ph=(tsim*G.f)%1;
+ var T=TECH[G.tech],vcc=G.vcc,Tp=1/G.f,tph=tsim%Tp,td=G.td*1e-6;
  M.forEach(function(m){
-  var on=ph<m.duty,e=m.K*m.w,d=m.dir=="fwd"?1:m.dir=="rev"?-1:0,vt=0,rec=false,open=false;
-  if(d){if(on)vt=d*(vcc-T.vd)-T.rs*m.i;else if(d*m.i>0){vt=-d*VF;rec=true}else open=true}
-  else if(m.dir=="brake")vt=-T.rs*m.i;else open=true;
-  if(open){m.i=0;vt=e}
-  else{m.i+=(vt-m.R*m.i-e)/m.L*DT;if(d&&d*m.i<0){m.i=0;vt=e}}
+  var i=m.i,e=m.K*m.w,d=m.dir=="fwd"?1:m.dir=="rev"?-1:0,vt=0,va=NaN,vb=NaN,pt="OFF",on=false,rec=false,q=[0,0,0,0],dr=T.vd/2+T.rs/2*Math.abs(i);
+  var mode=tsim<m.dz?"N":d?(G.cm?"C":"S"):m.dir=="brake"?"B":"N";
+  if(mode=="C"){
+   var tOn=dEff(m)*Tp,rg=tph<td?0:tph<tOn?1:tph<tOn+td?0:2;
+   if(rg){if(m.lc&&m.lc!=rg)shoot(m,T);m.lc=rg}
+   if(rg==1){q=[1,0,0,1];if(i>=0){vt=vcc-T.vd-T.rs*i;pt="Fo";va=vcc-dr;vb=dr}else{vt=vcc+1.4;pt="Dn";va=vcc+0.7;vb=-0.7}}
+   else if(rg==2){q=[0,1,1,0];if(i<=0){vt=-(vcc-T.vd)-T.rs*i;pt="Ro";va=dr;vb=vcc-dr}else{vt=-(vcc+1.4);pt="Dp";va=-0.7;vb=vcc+0.7}}
+   else mode="N";
+  }
+  if(mode=="S"){
+   on=(tph/Tp)<m.duty;q=d>0?[1,0,0,on?1:0]:[0,1,on?1:0,0];
+   if(on){vt=d*(vcc-T.vd)-T.rs*i;pt=d>0?"Fo":"Ro";if(d>0){va=vcc-dr;vb=dr}else{vb=vcc-dr;va=dr}}
+   else if(d*i>0){vt=-d*VF;pt=d>0?"Fr":"Rr";rec=true;if(d>0){va=vcc-0.3;vb=vcc+0.7}else{vb=vcc-0.3;va=vcc+0.7}}
+   else mode="O";
+  }
+  if(mode=="B"){vt=-T.rs*i;q=[0,0,1,1];pt="BR";va=-T.rs/2*i;vb=T.rs/2*i}
+  if(mode=="N"){if(i>0){vt=-(vcc+1.4);pt="Dp";va=-0.7;vb=vcc+0.7}else if(i<0){vt=vcc+1.4;pt="Dn";va=vcc+0.7;vb=-0.7}else mode="O"}
+  if(mode=="O"){m.i=0;vt=e;va=vb=NaN}
+  else{var ni=i+(vt-m.R*i-e)/m.L*DT;if(mode=="N"&&ni*i<0)ni=0;if(mode=="S"&&d*ni<0){ni=0;vt=e}m.i=ni}
   var Tl=m.load/1000*Math.tanh(m.w/3);
   m.w+=(m.K*m.i-m.b*m.w-Tl)/m.J*DT;
   var a=DT/0.05;m.vavg+=(vt-m.vavg)*a;m.iavg+=(m.i-m.iavg)*a;
-  m.cN++;if(d&&on)m.cOn++;if(rec)m.cRec++;
+  m.va=va;m.vb=vb;m.on=on;m.dd=d;m.rec=rec;m.vt=vt;m.pt=pt;m.qs=q;
+  m.cN++;if(mode=="S"&&on)m.cOn++;if(rec)m.cRec++;if(q[0]&&q[3])m.c14++;if(q[1]&&q[2])m.c23++;if(pt=="Dp")m.cDp++;if(pt=="Dn")m.cDn++;
   if(sa%4==0){m.vh.push(vt);m.ih.push(m.i);if(m.vh.length>1000){m.vh.shift();m.ih.shift()}}
   if(sa%2000==0){m.wh.push(m.w*9.5493);if(m.wh.length>1000)m.wh.shift()}
  });
@@ -147,12 +169,102 @@ function dgLabel(){}
 function updDg(){
  var m=M[sel],o=function(id,v){$(id).setAttribute("fill-opacity",v)};
  ["q1","q2","q3","q4","d1","d2","d3","d4"].forEach(function(x){o(x,0)});
- if(m.dir=="fwd"){o("q1",1);o("q4",m.fOn);o("d2",m.fRec)}
+ if(G.cm&&(m.dir=="fwd"||m.dir=="rev")){o("q1",m.f14);o("q4",m.f14);o("q2",m.f23);o("q3",m.f23);o("d2",m.fDp);o("d3",m.fDp);o("d1",m.fDn);o("d4",m.fDn)}
+ else if(m.dir=="fwd"){o("q1",1);o("q4",m.fOn);o("d2",m.fRec)}
  else if(m.dir=="rev"){o("q2",1);o("q3",m.fOn);o("d1",m.fRec)}
  else if(m.dir=="brake"){o("q3",1);o("q4",1)}
  var a=Math.min(1,0.15+Math.abs(m.iavg)*0.8);
  ["w1","w2"].forEach(function(id){$(id).setAttribute("stroke-width",Math.abs(m.iavg)>0.01?4:1.5);$(id).style.opacity=Math.abs(m.iavg)>0.01?a:0.5});
  $("ar").textContent=m.iavg>0.02?"i  →":m.iavg<-0.02?"←  i":"";
+}
+// ---- esquemático completo
+function e12(x){if(!(x>0)||!isFinite(x))return '—';var d=Math.pow(10,Math.floor(Math.log10(x))),n=x/d,A=[1,1.2,1.5,1.8,2.2,2.7,3.3,3.9,4.7,5.6,6.8,8.2,10],b=A[0];A.forEach(function(a){if(Math.abs(Math.log(a/n))<Math.abs(Math.log(b/n)))b=a});var v=+(b*d).toPrecision(3);return(v>=1e3?(v/1e3)+' kΩ':v+' Ω').replace('.',',')}
+var SCH_IDS=['mw0','mm','mw1','rv','rg'];
+['a','b','qh','c','d','e','f','ql','g','h','dh','dl','hd','bl'].forEach(function(k){SCH_IDS.push(k+'0',k+'1')});
+function schem(){
+ var T=TECH[G.tech],mos=G.tech=='mos',bjt=G.tech=='bjt',m=M[sel],o='',vcc=G.vcc;
+ var ist=(vcc-T.vd)/(m.R+T.rs),ib=T.bf?ist/T.bf:0;
+ var RB=mos?'220 Ω':e12(bjt?(3.3-0.7-ib*2.5-T.vbe)/ib:(3.3-T.vbe)/ib),RC=mos?'100 Ω':e12((vcc-T.vbe-0.3)/ib),QD=bjt?'BD139':'2N2222',RB1=bjt?'330 Ω':'4,7 kΩ';
+ var Ln=function(a,b,c,d){o+=`<line x1='${a}' y1='${b}' x2='${c}' y2='${d}' stroke='currentColor' stroke-width='1.4'/>`};
+ var Tx=function(x,y,s,an,sz,id){o+=`<text ${id?"id='"+id+"' ":''}x='${x}' y='${y}' font-size='${sz||10}' text-anchor='${an||'start'}' fill='currentColor'>${s}</text>`};
+ var Dt=function(x,y){o+=`<circle cx='${x}' cy='${y}' r='2.5' fill='currentColor'/>`};
+ var Gd=function(x,y){Ln(x,y,x,y+4);Ln(x-7,y+4,x+7,y+4);Ln(x-4,y+7,x+4,y+7);Ln(x-1.5,y+10,x+1.5,y+10)};
+ var Rv=function(x,a,b,t,an){o+=`<rect x='${x-5}' y='${a}' width='10' height='${b-a}' fill='none' stroke='currentColor' stroke-width='1.4'/>`;Tx(x+(an=='end'?-9:9),(a+b)/2+3,t,an,9)};
+ var Rh=function(a,b,y,t){o+=`<rect x='${Math.min(a,b)}' y='${y-5}' width='${Math.abs(b-a)}' height='10' fill='none' stroke='currentColor' stroke-width='1.4'/>`;Tx((a+b)/2,y-9,t,'middle',9)};
+ var Bx=function(x,y,n,s){o+=`<rect x='${x-18}' y='${y}' width='36' height='50' rx='4' fill='none' stroke='currentColor' stroke-width='1.6'/>`;Tx(x,y+26,n,'middle',12);Tx(x,y+39,s,'middle',8)};
+ var Di=function(x,y){o+=`<polygon points='${x},${y} ${x-7},${y+16} ${x+7},${y+16}' fill='none' stroke='currentColor' stroke-width='1.4'/>`;Ln(x-7,y,x+7,y)};
+ var Gs=function(id){o+=`<g id='${id}'>`},Ge=function(){o+='</g>'};
+ var P=sel?['IO21','IO23','IO22','IO25']:['IO16','IO18','IO17','IO19'];
+ var leg=function(j,x,s,nh,nl,dh,dl,qd,ph,pl){
+  var xi=x-s*52,an=s>0?'start':'end',ai=s>0?'end':'start',xb=x+s*50,xq=x+s*100,xe=x+s*100;
+  var seg=function(id,y1,y2){Gs(id+j);Ln(x,y1,x,y2);Ge()};
+  seg('a',24,50);seg('b',50,70);Gs('qh'+j);Bx(x,70,nh,T.hi.split(' ')[0]);Ge();seg('c',120,140);seg('d',140,210);seg('e',210,270);seg('f',270,290);
+  Gs('ql'+j);Bx(x,290,nl,T.lo.split(' ')[0]);Ge();seg('g',340,360);seg('h',360,400);
+  Dt(x,50);Dt(x,140);Dt(x,210);Dt(x,270);Dt(x,360);
+  Tx(x+s*8,66,mos?'S':'E',an,9);Tx(x+s*8,134,mos?'D':'C',an,9);Tx(x+s*22,91,mos?'G':'B',an,9);
+  Tx(x+s*8,284,mos?'D':'C',an,9);Tx(x+s*8,354,mos?'S':'E',an,9);Tx(x+s*22,311,mos?'G':'B',an,9);
+  Gs('dh'+j);Ln(x,50,xi,50);Ln(xi,50,xi,88);Di(xi,88);Ln(xi,104,xi,140);Ln(xi,140,x,140);Ge();Tx(xi-s*10,100,dh,ai,10);
+  Gs('dl'+j);Ln(x,270,xi,270);Ln(xi,270,xi,288);Di(xi,288);Ln(xi,304,xi,360);Ln(xi,360,x,360);Ge();Tx(xi-s*10,300,dl,ai,10);
+  Dt(xb,24);Dt(xb,95);Ln(xb,24,xb,40);Rv(xb,40,70,'Rp 10 kΩ',an);Ln(xb,70,xb,95);
+  Gs('hd'+j);Ln(x+s*18,95,xq,95);Ln(xq,95,xq,105);Rv(xq,105,135,'Rc '+RC,an);Ln(xq,135,xq,150);Bx(xq,150,qd,QD);Gd(xq,200);Ln(xq+s*18,175,xq+s*28,175);Rh(xq+s*28,xq+s*58,175,'Rb '+RB1);Ln(xq+s*58,175,xq+s*70,175);Ge();
+  Tx(xq+s*74,178,ph,an,10);Tx(xq+s*74,190,'',an,9,'pH'+j);Tx(xb+s*6,91,'',an,9,'vbh'+j);
+  Gs('bl'+j);Ln(x+s*18,315,x+s*30,315);Ln(x+s*30,315,x+s*40,315);Rh(x+s*40,x+s*70,315,'Rb '+RB);Ln(x+s*70,315,xe,315);
+  if(bjt){Ln(xe,265,xe,252);Ln(xe-6,252,xe+6,252);Bx(xe,265,j?'Q8':'Q7','BD139');Ln(xe+s*18,290,xe+s*28,290);Rh(xe+s*28,xe+s*58,290,'R1 100 Ω');Ln(xe+s*58,290,xe+s*70,290)}
+  Ge();
+  if(bjt)Tx(xe,248,'+Vcc','middle',8);
+  Dt(x+s*30,315);
+  var ly=bjt?293:318;
+  Tx(xe+s*74,ly,pl,an,10);Tx(xe+s*74,ly+12,'',an,9,'pL'+j);Tx(x+s*36,328,'',an,9,'vbl'+j);
+  Ln(x+s*30,315,x+s*30,335);Rv(x+s*30,335,365,'10 kΩ',an);Ln(x+s*30,365,x+s*30,372);Gd(x+s*30,372);
+ };
+ o+=`<g transform='translate(30,0)'>`;
+ Ln(20,24,620,24);Ln(20,400,620,400);Tx(22,18,'+Vcc ('+vcc.toFixed(1)+' V)',null,11);Tx(22,394,'GND común',null,11);
+ Gs('rv');Ln(205,24,435,24);Ge();Gs('rg');Ln(205,400,435,400);Ge();
+ leg(0,205,-1,'Q1','Q3','D1','D3','Q5',P[0],P[1]+' PWM');
+ leg(1,435,1,'Q2','Q4','D2','D4','Q6',P[2],P[3]+' PWM');
+ Gs('mw0');Ln(205,210,296,210);Ge();Gs('mw1');Ln(344,210,435,210);Ge();
+ Gs('mm');o+=`<circle cx='320' cy='210' r='24' fill='none' stroke='currentColor' stroke-width='2'/>`;Tx(320,216,'M','middle',15);Ge();
+ Tx(320,250,'Motor '+m.n,'middle',11);Tx(320,150,'','middle',11,'shb');Tx(320,264,'','middle',10,'vm');Tx(320,277,'','middle',10,'im');
+ Tx(193,200,'','end',10,'nA');Tx(447,200,'','start',10,'nB');
+ [[305,'C1','100 µF'],[335,'C2','100 nF']].forEach(function(c){var x=c[0];Dt(x,24);Ln(x,24,x,60);Ln(x-10,60,x+10,60);Ln(x-10,66,x+10,66);Ln(x,66,x,76);Gd(x,76);Tx(x,100,c[1],'middle',9);Tx(x,111,c[2],'middle',8)});
+ Tx(320,414,'GND del ESP32 unido al GND de potencia','middle',10);
+ o+='</g>';
+ $('sch').innerHTML=o;$('sn').textContent=m.n;
+ var h='<ul><li><b>ESP32 DevKit (lógica de 3,3 V)</b>: motor A: Q1 → IO16, Q2 → IO17, Q3 → IO18 (PWM), Q4 → IO19 (PWM); motor B: Q1 → IO21, Q2 → IO22, Q3 → IO23 (PWM), Q4 → IO25 (PWM). Todos los GPIO admiten PWM por LEDC. Se evitan los pines de arranque (0, 2, 5, 12, 15), los de la flash (6 a 11) y los de solo entrada (34 a 39).</li>'+
+ '<li>Nodo A (entre Q1 y Q3) al borne 1 del motor y nodo B (entre Q2 y Q4) al borne 2. Los dos puentes comparten +Vcc, GND y los condensadores C1 y C2.</li>'+
+ '<li>Q5 y Q6 ('+QD+') invierten la señal del lado alto: pin en ALTO = conduce. Rp mantiene apagado el transistor de lado alto.</li>';
+ if(bjt)h+='<li><b>Driver para BJT</b>: Q7 y Q8 (BD139) en seguidor de emisor dan la corriente de base de los TIP31C (hasta '+Math.round(ist/10*1000)+' mA con el rotor bloqueado). Cada uno toma del pin unos '+Math.round(ist/10/40*1000)+' mA a través de R1 (100 Ω); el ESP32 admite con comodidad unos 12 mA por pin.'+(ist/10/40>0.012?' <span class="wa">Se pasa de ese límite: usa un driver intermedio.</span>':'')+' Rb limita la corriente de base y Rc fija la del TIP32C.</li>';
+ h+='</ul><p><b>Estados de los pines del motor '+m.n+'</b></p><ul>'+
+ '<li>Adelante: '+P[0]+' ALTO, '+P[3]+' PWM, '+P[2]+' BAJO, '+P[1]+' BAJO</li>'+
+ '<li>Atrás: '+P[2]+' ALTO, '+P[1]+' PWM, '+P[0]+' BAJO, '+P[3]+' BAJO</li>'+
+ '<li>Freno: '+P[1]+' ALTO, '+P[3]+' ALTO, '+P[0]+' BAJO, '+P[2]+' BAJO</li>'+
+ '<li>Libre: los cuatro pines en BAJO</li></ul>';
+ if(mos)h+='<p class="wa">Con 3,3 V de puerta el IRLZ44N (nivel lógico) conduce, pero con Rds(on) mayor que a 5 V; un driver de puerta a 10–12 V lo mejora.'+(vcc>20?' Con Vcc mayor de 20 V, la Vgs del IRF9Z34N supera su máximo: añade un zener de 12 V entre puerta y fuente.':'')+'</p>';
+ $('tbl').innerHTML=h;
+}
+function schemUpd(){
+ if(!$('sch').firstChild||!$('mw0'))return;
+ var m=M[sel],T=TECH[G.tech],mos=G.tech=='mos',vcc=G.vcc,H={},C={},d=m.dd,on=m.on,br=m.dir=='brake',i=m.i;
+ var h=function(){for(var k=0;k<arguments.length;k++)H[arguments[k]]=1};
+ var q=m.qs.map(function(v){return v?true:false});
+ var SETS={Fo:['a0','b0','qh0','c0','d0','mw0','mm','mw1','e1','f1','ql1','g1','h1'],Fr:['d1','dh1','a1','rv','a0','b0','qh0','c0','d0','mw0','mm','mw1'],Ro:['a1','b1','qh1','c1','d1','mw0','mm','mw1','e0','f0','ql0','g0','h0'],Rr:['d0','dh0','a0','rv','a1','b1','qh1','c1','d1','mw0','mm','mw1'],Dp:['mw0','mm','mw1','d1','dh1','a1','h0','dl0','e0'],Dn:['mw0','mm','mw1','d0','dh0','a0','h1','dl1','e1'],BRp:['mw0','mm','mw1','e1','f1','ql1','g1','h1','rg','h0','dl0','e0'],BRn:['mw0','mm','mw1','e0','f0','ql0','g0','h0','rg','h1','dl1','e1']};
+ if($('hl').checked){
+  var pk=m.pt=='BR'?(i>0.01?'BRp':i<-0.01?'BRn':''):m.pt;
+  (SETS[pk]||[]).forEach(function(k){H[k]=1});
+  if(q[0])C.hd0=1;if(q[1])C.hd1=1;if(q[2])C.bl0=1;if(q[3])C.bl1=1;
+ }
+ var SH=m.fl>0?['qh0','ql0','qh1','ql1','d0','e0','d1','e1']:[];
+ var bn=$('shb');if(bn){bn.textContent=m.fl>0?'¡Cortocircuito!':'';bn.setAttribute('fill','#d633ff')}
+ SCH_IDS.forEach(function(id){var e=$(id);if(e)e.setAttribute('class',SH.indexOf(id)>=0?'sh':H[id]?'hot':C[id]?'ctl':'')});
+ var f=function(v){return isNaN(v)?'flot.':v.toFixed(1).replace('.',',')+' V'};
+ var t=function(id,s){var e=$(id);if(e)e.textContent=s};
+ t('nA','A: '+f(m.va));t('nB','B: '+f(m.vb));t('vm','Vm = '+f(m.vt));t('im','Im = '+(isNaN(i)?0:i).toFixed(2).replace('.',',')+' A');
+ for(var j=0;j<2;j++){
+  var qh=q[j],ql=q[2+j];
+  t('vbh'+j,(mos?'Vg = ':'Vb = ')+f(qh?(mos?0.3:vcc-T.vbe):vcc));
+  t('vbl'+j,(mos?'Vg = ':'Vb = ')+f(ql?(mos?3.3:T.vbe):0));
+  t('pH'+j,qh?'ALTO 3,3 V':'BAJO 0 V');t('pL'+j,ql?'ALTO 3,3 V':'BAJO 0 V');
+ }
 }
 // ---- lista de componentes y comprobaciones
 function bom(){
@@ -161,8 +273,8 @@ function bom(){
  var dio=ist<=1?"1N4007 o Schottky 1N5819 (1 A)":ist<=3?"1N5401 o Schottky 1N5822 (3 A)":"Schottky de 5 A o más";
  h+="<li>D1 a D4 en antiparalelo con cada transistor: "+dio+"</li>";
  h+="<li>Corriente de rotor bloqueado (peor motor): <b>"+ist.toFixed(2)+" A</b>"+(ist>T.imax?' <span class="bad">— supera los '+T.imax+' A del transistor</span>':" — dentro de los "+T.imax+" A del transistor")+"</li>";
- if(T.bf){var ib=ist/T.bf,rb=(5-T.vbe)/ib;h+="<li>Base: Ib ≈ "+(ib*1e3).toFixed(1)+" mA con ganancia forzada "+T.bf+"; Rb ≈ "+Math.round(rb)+" Ω desde 5 V"+(ib>0.02?' <span class="wa">— un pin de microcontrolador no da tanto: usa un driver</span>':"")+"</li>"}
- else h+="<li>Puertas: resistencia de 100–220 Ω en serie y 10 kΩ puerta-fuente. Con Vcc de 8 V o más, el canal P del lado alto necesita un desplazador de nivel; con 5 V de lógica, el IRFZ44N no está a plena conducción (no es de nivel lógico).</li>";
+ if(T.bf){var ib=ist/T.bf,rb=(3.3-T.vbe)/ib;h+="<li>Base: Ib ≈ "+(ib*1e3).toFixed(1)+" mA con ganancia forzada "+T.bf+"; Rb ≈ "+Math.round(rb)+" Ω desde 3,3 V"+(ib>0.01?' <span class="wa">— mucho para un pin: el esquemático añade un driver (seguidor de emisor BD139)</span>':"")+"</li>"}
+ else h+="<li>Puertas: resistencia de 100–220 Ω en serie y 10 kΩ puerta-fuente. Con Vcc de 8 V o más, el canal P del lado alto necesita un desplazador de nivel; con 3,3 V de lógica hace falta un MOSFET de nivel lógico (IRLZ44N); el IRFZ44N no conduciría.</li>";
  h+="<li>100 µF / 50 V electrolítico y 100 nF cerámico junto al puente, lo más cerca posible.</li></ul>";
  h+="<p>Lógica segura: en adelante Q1 fijo y PWM en Q4; atrás, Q2 fijo y PWM en Q3. Nunca Q1 con Q3, ni Q2 con Q4: cortocircuito de la fuente.</p>";
  h+="<p>Caídas supuestas: "+T.vd.toFixed(1)+" V y "+T.rs+" Ω en el camino conductor; 1,0 V en recirculación por diodo.</p>";
@@ -191,24 +303,79 @@ function draw(){
   });
  });
 }
+function dtNote(){var T=TECH[G.tech],ok=G.td>=T.toff;$("dtn").innerHTML="Tiempo de apagado del transistor: "+T.toff+" µs (el simulador resuelve de 5 en 5 µs). "+(ok?"Con "+G.td+" µs de tiempo muerto no hay solape.":'<span class="bad">Con '+G.td+" µs hay solape: cortocircuito en cada cambio de rama.</span>")+(G.cm?"":" En modo lento solo importa al cambiar de sentido o frenar.")}
+function codeUpd(){
+ var f=Math.round(G.f);
+ var c=`// ESP32 + puente H discreto (dos motores) · Arduino-ESP32 3.x
+// Señal en ALTO = el transistor conduce (los NPN Q5/Q6 invierten el lado alto).
+
+struct Puente { int q1, q2, q3, q4; };      // q3 y q4: lado bajo, con PWM
+Puente A = {16, 17, 18, 19};
+Puente B = {21, 22, 23, 25};
+
+const int PWM_HZ   = ${f};
+const int PWM_BITS = 10;                     // duty 0..1023
+const int DEAD_US  = ${G.td};                       // tiempo muerto
+// ledcWrite aplica el nuevo duty al terminar el periodo en curso:
+// se espera un periodo completo más el tiempo muerto.
+const uint32_t ESPERA_US = 1000000UL / PWM_HZ + DEAD_US;
+
+void apagarTodo(Puente &p) {
+  digitalWrite(p.q1, LOW);  digitalWrite(p.q2, LOW);
+  ledcWrite(p.q3, 0);       ledcWrite(p.q4, 0);
+}
+void iniciar(Puente &p) {
+  pinMode(p.q1, OUTPUT);  pinMode(p.q2, OUTPUT);
+  digitalWrite(p.q1, LOW);  digitalWrite(p.q2, LOW);
+  ledcAttach(p.q3, PWM_HZ, PWM_BITS);
+  ledcAttach(p.q4, PWM_HZ, PWM_BITS);
+  apagarTodo(p);
+}
+void adelante(Puente &p, int v) {            // Q1 ALTO, Q4 PWM, Q2 y Q3 BAJO
+  apagarTodo(p);  delayMicroseconds(ESPERA_US);
+  digitalWrite(p.q1, HIGH);
+  ledcWrite(p.q4, v * 1023 / 100);           // v = 0..100 %
+}
+void atras(Puente &p, int v) {               // Q2 ALTO, Q3 PWM, Q1 y Q4 BAJO
+  apagarTodo(p);  delayMicroseconds(ESPERA_US);
+  digitalWrite(p.q2, HIGH);
+  ledcWrite(p.q3, v * 1023 / 100);
+}
+void freno(Puente &p) {                      // Q3 y Q4 ALTO, Q1 y Q2 BAJO
+  apagarTodo(p);  delayMicroseconds(ESPERA_US);
+  ledcWrite(p.q3, 1023);  ledcWrite(p.q4, 1023);
+}
+void libre(Puente &p) { apagarTodo(p); }     // los cuatro en BAJO
+
+void setup() { iniciar(A);  iniciar(B); }
+
+void loop() {
+  adelante(A, 70);  adelante(B, 70);  delay(3000);   // recto
+  freno(A);         freno(B);         delay(500);
+  adelante(A, 60);  atras(B, 60);     delay(2000);   // giro en sitio
+  libre(A);         libre(B);         delay(1000);
+}
+`;
+ $("code").textContent=c;
+}
 // ---- bucle
 function loop(now){
  var el=Math.min((now-last)/1000,0.05);last=now;
  if(!paused){
-  carry+=el*(G.slow?0.1:1);var n=Math.min(Math.floor(carry/DT),20000);carry-=n*DT;
-  M.forEach(function(m){m.cN=m.cOn=m.cRec=0});
+  carry+=el*G.sc;var n=Math.min(Math.floor(carry/DT),20000);carry-=n*DT;
+  M.forEach(function(m){m.cN=m.cOn=m.cRec=m.c14=m.c23=m.cDp=m.cDn=0});
   for(var k=0;k<n;k++)stepAll();
-  M.forEach(function(m){if(m.cN){m.fOn=m.cOn/m.cN;m.fRec=m.cRec/m.cN}m.da+=m.w*el*0.01*57.3});
+  M.forEach(function(m){if(m.cN){var n=m.cN;m.fOn=m.cOn/n;m.fRec=m.cRec/n;m.f14=m.c14/n;m.f23=m.c23/n;m.fDp=m.cDp/n;m.fDn=m.cDn/n}m.da+=m.w*el*0.01*57.3;m.fl=Math.max(0,m.fl-el)});
  }
  M.forEach(function(m,k){
   $("ro"+k).setAttribute("transform","rotate("+(m.da%360)+")");
   var st=m.dir=="fwd"?"adelante":m.dir=="rev"?"atrás":m.dir=="brake"?"frenando":"rueda libre";
-  $("tl"+k).innerHTML=Math.round(m.w*9.5493)+" rpm · "+m.vavg.toFixed(1)+" V · "+Math.abs(m.iavg).toFixed(2)+" A · "+st;
+  $("tl"+k).innerHTML=Math.round(m.w*9.5493)+" rpm · "+m.vavg.toFixed(1)+" V · "+Math.abs(m.iavg).toFixed(2)+" A · "+st+(G.cm&&(m.dir=="fwd"||m.dir=="rev")?" · D "+Math.round(dEff(m)*100)+" %":"")+(m.sc?' · <b class="bad">cortocircuitos: '+m.sc+" (pico "+m.stI.toFixed(0)+" A por rama, "+m.stE.toFixed(0)+" µJ)</b>":"");
  });
- updDg();draw();
+ updDg();schemUpd();draw();
  requestAnimationFrame(loop);
 }
-syncUI();build();tabs();bom();
+syncUI();build();tabs();bom();codeUpd();$("cp").onclick=function(){var r=document.createRange();r.selectNodeContents($("code"));var g=getSelection();g.removeAllRanges();g.addRange(r);try{navigator.clipboard.writeText($("code").textContent);this.textContent="Copiado"}catch(e){}};
 requestAnimationFrame(function(t){last=t;loop(t)});
 </script>
 </body>
